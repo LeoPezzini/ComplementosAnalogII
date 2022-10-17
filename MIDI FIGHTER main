@@ -1,0 +1,338 @@
+#include <MIDI.h>
+#include "Controller.h"
+
+#define PIN_OCT_MAS 9
+#define PIN_OCT_MENOS 10
+/*************************************************************
+ CONTROLADOR MIDI FIGHTER
+ *************************************************************/
+
+MIDI_CREATE_DEFAULT_INSTANCE();
+
+//************************************************************
+//***Set de Numero de Botones y Potes**************************
+//************************************************************
+//---Cuantos botones hay conectados directo a pines?---------
+byte NUMERO_BOTONES = 0;
+//---Cuantos potes hay conectados directo a pines?--
+byte NUMERO_POTES = 0;
+//---Cuantos botones hay conectados al multiplexer?---------
+byte MUX_NUMERO_BOTONES = 12;
+//---Cuantos potes hay conectados al multiplexer?--
+byte MUX_NUMERO_POTES = 4;
+//************************************************************
+
+//***DEFINICION DE ARREGLO DE NOTAS, CANAL MIDI, BOTONES DE CAMBIO DE OCTAVA**
+
+byte NOTA[12];
+byte i;
+byte CANAL= 1;
+int OCT_MAS= 0;
+int OCT_MENOS= 0;
+bool rebote_flag1= 0; // Bandera para funcion antirebote
+bool rebote_flag2= 0; // Bandera 2 para funcion antirebote
+unsigned long tiempo1; // Tiempo auxiliar de antirebote 1
+unsigned long tiempo2; // Tiempo auxiliar de antirebote 2
+byte tiempo_antirebote = 10; // tiempo de antirrebote = 10ms
+
+//***ARREGLO DE NOTAS: Desde C4= 60 a B4= 71***
+
+for (i=0; i<12; i++){
+	NOTA[i] = 60+i;
+}
+
+//***HAY MULTIPLEXERS? (74HC4067)************************************
+//Los pines de direccion del Mux deben conectarse a los pines 2,3,4,5 del Arduino UNO
+//A0 = PIN2, A1 = PIN3, A2 = PIN4, A3 = PIN5
+//*******************************************************************
+//Mux NOMBRE_MULTIPLEXER (PIN_SALIDA_DE_MUX_CONECTADO_A_ARDUINO, , Multiplexer de cuantos pines?(8 o 16) , Es analogico?);
+
+
+Mux M1(A0, 16, true); //Multiplexer Analogico en el pin A0 de Arduino UNO
+//Mux M2(A1, 8, true); /Ejemplo Multiplexer Analogico de 8 entradas en el pin A1 de Arduino UNO
+//*******************************************************************
+
+
+//***DEFINICION DE POTES CONECTADOS DIRECTAMENTE AL ARDUINO************************
+//Pot (Numero de Pin Arduino, comando, CC Control, CANAL MIDI)
+//**El parametro comando está planeado para un uso futuro**
+
+//Pot PO1(A0, 0, 1, 1);
+//Pot PO2(A1, 0, 10, 1);
+//Pot PO3(A2, 0, 22, 1);
+//Pot PO4(A3, 0, 118, 1);
+//Pot PO5(A4, 0, 30, 1);
+//Pot PO6(A5, 0, 31, 1);
+//*******************************************************************
+//Añadir potes en un arreglo de la siguiente forma->  Pot *POTS[] {&PO1, &PO2, &PO3, &PO4, &PO5, &PO6};
+Pot *POTS[] {};
+//*******************************************************************
+
+
+//***DEFINICION DE BOTONES CONECTADOS DIRECTAMENTE AL ARDUINO*******************************
+//Button (Numero de Pin Arduino, comando, NOTA, CANAL MIDI, Tiempo de Rebote)
+//** Parametros de comando: 0=NOTA  1=CC  2=CC con retencion **
+
+//Button BU1(2, 0, 60, 1, 5 );
+//Button BU2(3, 0, 61, 1, 5 );
+//Button BU3(4, 0, 62, 1, 5 );
+//Button BU4(5, 0, 63, 1, 5 );
+//Button BU5(6, 0, 64, 1, 5 );
+//Button BU6(7, 0, 65, 1, 5 );
+//Button BU7(8, 1, 64, 1, 5 );
+//Button BU8(9, 2, 64, 1, 5 );
+//*******************************************************************
+//Añadir botones en un arreglo de la siguiente forma->  Button *BUTTONS[] {&BU1, &BU2, &BU3, &BU4, &BU5, &BU6, &BU7, &BU8};
+Button *BUTTONS[] {};
+//*******************************************************************
+
+
+//***DEFINICION DE BOTONES CONECTADOS AL MULTIPLEXER*************************
+//Button::Button(Mux mux, byte muxpin, byte de comando, byte value, byte de CANAL, byte antirebote)
+//** Parametros de comando 0=NOTA  1=CC  2=Boton con retencion CC **
+
+Button MBU1(M1, 0, 0, NOTA[0], CANAL, 5);
+Button MBU2(M1, 1, 0, NOTA[1], CANAL, 5);
+Button MBU3(M1, 2, 0, NOTA[2], CANAL, 5);
+Button MBU4(M1, 3, 0, NOTA[3], CANAL, 5);
+Button MBU5(M1, 4, 0, NOTA[4], CANAL, 5);
+Button MBU6(M1, 5, 0, NOTA[5], CANAL, 5);
+Button MBU7(M1, 6, 0, NOTA[6], CANAL, 5);
+Button MBU8(M1, 7, 0, NOTA[7], CANAL, 5);
+Button MBU9(M1, 8, 0, NOTA[8], CANAL, 5);
+Button MBU10(M1, 9, 0, NOTA[9], CANAL, 5);
+Button MBU11(M1, 10, 0, NOTA[10], CANAL, 5);
+Button MBU12(M1, 11, 0, NOTA[11], CANAL, 5);
+//Button MBU13(M1, 12, 0, 82, 1, 5);
+//Button MBU14(M1, 13, 0, 83, 1, 5);
+//Button MBU15(M1, 14, 0, 84, 1, 5);
+//Button MBU16(M1, 15, 0, 85, 1, 5);
+//*******************************************************************
+////Añadir botones de Mux en un arreglo de la siguiente forma->  Button *MUXBUTTONS[] {&MBU1, &MBU2, &MBU3, &MBU4, &MBU5, &MBU6.....};
+Button *MUXBUTTONS[] {&MBU1, &MBU2, &MBU3, &MBU4, &MBU5, &MBU6, &MBU7, &MBU8, &MBU9, &MBU10, &MBU11, &MBU12};
+
+//*******************************************************************
+
+
+//***DEFINICION DE POTES CONECTADOS AL MULTIPLEXER*******************
+//Pot::Pot(Mux mux, byte muxpin, byte comando, byte control, byte de CANAL)
+//**El parametro comando está planeado para un uso futuro**
+
+//Pot MPO1(M2, 0, 0, 1, 1);
+//Pot MPO2(M2, 1, 0, 7, 1);
+//Pot MPO3(M2, 2, 0, 50, 1);
+//Pot MPO4(M2, 3, 0, 55, 2);
+//Pot MPO5(M2, 4, 0, 50, 1);
+//Pot MPO6(M2, 5, 0, 55, 2);
+//Pot MPO7(M2, 6, 0, 50, 1);
+//Pot MPO8(M2, 7, 0, 55, 2);
+//Pot MPO9(M2, 8, 0, 50, 1);
+//Pot MPO10(M2, 9, 0, 55, 2);
+//Pot MPO11(M2, 10, 0, 50, 1);
+//Pot MPO12(M2, 11, 0, 55, 2);
+Pot MPO13(M1, 12, 0, 52, CANAL);
+Pot MPO14(M1, 13, 0, 53, CANAL);
+Pot MPO15(M1, 14, 0, 54, CANAL);
+Pot MPO16(M1, 15, 0, 55, CANAL);
+//*******************************************************************
+//AAñadir potes de Mux en un arreglo de la siguiente forma-->  Pot *MUXPOTS[] {&MPO1, &MPO2, &MPO3, &MPO4, &MPO5, &MPO6.....};
+Pot *MUXPOTS[] {&MPO13, &MPO14, &MPO15, &MPO16};
+//*******************************************************************
+
+
+void setup() {
+  MIDI.begin(MIDI_CHANNEL_OFF);
+  pinMode(PIN_OCT_MAS, INPUT_PULLUP); // Configuracion de Boton para subir octavas
+  pinMode(PIN_OCT_MENOS, INPUT_PULLUP); // Configuracion de Boton para bajar octavas
+}
+
+void loop() {
+  if (NUMERO_BOTONES != 0) updateButtons();
+  if (NUMERO_POTES != 0) updatePots();
+  
+  Subir_Octava(); // Verifica si se debe subir una octava dependiendo de boton PIN_OCT_MAS
+  Bajar_Octava(); // Verifica si se debe bajar una octava dependiendo de boton PIN_OCT_MENOS
+  
+  if (MUX_NUMERO_BOTONES != 0) updateMuxButtons();
+  if (MUX_NUMERO_POTES != 0) updateMuxPots();
+  
+}
+
+
+//*****************************************************************
+
+//*** FUNCION DE SUBIR OCTAVA *************************************
+//*** Establece en primer lugar un antirebote para el boton que cambia la octava. Luego actualiza los valores de las notas midi. ***
+void Subir_Octava() {
+	int aux, j;
+		if (rebote_flag1 == 0) {
+			aux = digitalRead(PIN_OCT_MAS);  // Lee el valor del boton octava
+			if 	(OCT_MAS == HIGH){
+				if ( aux == LOW) {
+					rebote_flag1= 1;
+					tiempo1= millis(); // tiempo de boton oct para comparar
+				}	
+			}
+			else {                    // Cuando OCT_MAS == LOW
+				if (aux == HIGH) {
+					rebote_flag1= 1;
+					tiempo1= millis(); // tiempo de boton oct para comparar
+				}
+			}
+		}
+		else {								// Cuando rebote_flag1 == 1
+			if (millis() - tiempo1 >= tiempo_antirebote ) {
+				OCT_MAS = digitalRead(PIN_OCT_MAS);
+				rebote_flag1 = 0;           // Actualizo el valor de rebote_flag1 para impedir que el boton presionado vuelva a entrar a la funcion
+				
+				if (OCT_MAS == HIGH){
+					if (NOTA[0] < 96){         // Limite para la octava de C7
+						for (j=0; j<12 ; j++){
+							NOTA[j] += 12;    // Aumenta una octava la nota en cuestion
+						}
+					}
+				}
+			}
+		}
+	 
+}
+
+//*****************************************************************
+
+//*** FUNCION DE BAJAR OCTAVA *************************************
+//*** Analogo a LA funcion de SUBIR OCTAVA. Excepto que las notas bajan de octava en vez de subir.
+void Bajar_Octava() {
+	int aux, j;
+		if (rebote_flag2 == 0) {
+			aux = digitalRead(PIN_OCT_MENOS);  // Lee el valor del boton octava
+			if 	(OCT_MENOS == HIGH){
+				if ( aux == LOW) {
+					rebote_flag2= 1;
+					tiempo2= millis(); // tiempo de boton oct para comparar
+				}	
+			}
+			else {                    // Cuando OCT_MENOS == LOW
+				if (aux == HIGH) {
+					rebote_flag2= 1;
+					tiempo2= millis(); // tiempo de boton oct para comparar
+				}
+			}
+		}
+		else {								// Cuando rebote_flag2 == 1
+			if (millis() - tiempo2 >= tiempo_antirebote ) {
+				OCT_MENOS = digitalRead(PIN_OCT_MENOS);
+				rebote_flag2 = 0;          // Actualizo el valor de rebote_flag2 para impedir que el boton presionado vuelva a entrar a la funcion
+				
+				if (OCT_MENOS == HIGH){
+					if (NOTA[0] > 24){         // Limite para la octava de C1
+						for (j=0; j<12 ; j++){
+							NOTA[j] -= 12;    // Disminuye la nota una octava en cuestion
+						}
+					}
+				}
+			}
+		}
+	 
+}
+
+//*****************************************************************
+
+void updateButtons() {
+
+  // Ciclo de Arreglo de Botones
+  for (int i = 0; i < NUMERO_BOTONES; i = i + 1) {
+    byte message = BUTTONS[i]->getValue();
+
+    //  Si el Boton esta presionado
+    if (message == 0) {
+      switch (BUTTONS[i]->Bcommand) {
+        case 0: //NOTA
+          MIDI.sendNoteOn(BUTTONS[i]->Bvalue, 127, BUTTONS[i]->Bchannel);
+          break;
+        case 1: //CC
+          MIDI.sendControlChange(BUTTONS[i]->Bvalue, 127, BUTTONS[i]->Bchannel);
+          break;
+        case 2: //Para el modo con retencion
+          if (BUTTONS[i]->Btoggle == 0) {
+            MIDI.sendControlChange(BUTTONS[i]->Bvalue, 127, BUTTONS[i]->Bchannel);
+            BUTTONS[i]->Btoggle = 1;
+          }
+          else if (BUTTONS[i]->Btoggle == 1) {
+            MIDI.sendControlChange(BUTTONS[i]->Bvalue, 0, BUTTONS[i]->Bchannel);
+            BUTTONS[i]->Btoggle = 0;
+          }
+          break;
+      }
+    }
+
+    //  Si el Boton no esta presionado
+    if (message == 1) {
+      switch (BUTTONS[i]->Bcommand) {
+        case 0:
+          MIDI.sendNoteOff(BUTTONS[i]->Bvalue, 0, BUTTONS[i]->Bchannel);
+          break;
+        case 1:
+          MIDI.sendControlChange(BUTTONS[i]->Bvalue, 0, BUTTONS[i]->Bchannel);
+          break;
+      }
+    }
+  }
+}
+//*******************************************************************
+void updateMuxButtons() {
+
+  // Ciclo de Arreglo de Botones en el Multiplexer
+  for (int i = 0; i < MUX_NUMERO_BOTONES; i = i + 1) {
+
+    MUXBUTTONS[i]->muxUpdate();
+    byte message = MUXBUTTONS[i]->getValue();
+
+    //  Si el Boton esta presionado
+    if (message == 0) {
+      switch (MUXBUTTONS[i]->Bcommand) {
+        case 0: //Note
+          MIDI.sendNoteOn(MUXBUTTONS[i]->Bvalue, 127, MUXBUTTONS[i]->Bchannel);
+          break;
+        case 1: //CC
+          MIDI.sendControlChange(MUXBUTTONS[i]->Bvalue, 127, MUXBUTTONS[i]->Bchannel);
+          break;
+        case 2: //Para el modo con retencion
+          if (MUXBUTTONS[i]->Btoggle == 0) {
+            MIDI.sendControlChange(MUXBUTTONS[i]->Bvalue, 127, MUXBUTTONS[i]->Bchannel);
+            MUXBUTTONS[i]->Btoggle = 1;
+          }
+          else if (MUXBUTTONS[i]->Btoggle == 1) {
+            MIDI.sendControlChange(MUXBUTTONS[i]->Bvalue, 0, MUXBUTTONS[i]->Bchannel);
+            MUXBUTTONS[i]->Btoggle = 0;
+          }
+          break;
+      }
+    }
+    //  Si el Boton no esta presionado
+    if (message == 1) {
+      switch (MUXBUTTONS[i]->Bcommand) {
+        case 0:
+          MIDI.sendNoteOff(MUXBUTTONS[i]->Bvalue, 0, MUXBUTTONS[i]->Bchannel);
+          break;
+        case 1:
+          MIDI.sendControlChange(MUXBUTTONS[i]->Bvalue, 0, MUXBUTTONS[i]->Bchannel);
+          break;
+      }
+    }
+  }
+}
+//***********************************************************************
+void updatePots() {
+  for (int i = 0; i < NUMERO_POTES; i = i + 1) {
+    byte potmessage = POTS[i]->getValue();
+    if (potmessage != 255) MIDI.sendControlChange(POTS[i]->Pcontrol, potmessage, POTS[i]->Pchannel);
+  }
+}
+//***********************************************************************
+void updateMuxPots() {
+  for (int i = 0; i < MUX_NUMERO_POTES; i = i + 1) {
+    MUXPOTS[i]->muxUpdate();
+    byte potmessage = MUXPOTS[i]->getValue();
+    if (potmessage != 255) MIDI.sendControlChange(MUXPOTS[i]->Pcontrol, potmessage, MUXPOTS[i]->Pchannel);
+  }
+}
