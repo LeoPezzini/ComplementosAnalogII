@@ -1,4 +1,4 @@
-# ComplementosAnalogII
+# Complementos Analógica II
 
 Trabajo Final de la materia Complementos de Analógica 2
 
