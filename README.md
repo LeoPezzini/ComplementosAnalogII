@@ -1,6 +1,6 @@
-# Complementos Analógica II
+# **Complementos Analógica II
 
-Trabajo Final de la materia Complementos de Analógica 2
+## **Trabajo Final de la materia Complementos de Analógica 2
 
 Alumnos:
   Cuello, Marcelo
