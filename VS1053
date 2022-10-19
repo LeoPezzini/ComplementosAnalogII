@@ -1,6 +1,6 @@
 #include <SPI.h>
 #include <MIDI.h>
-#include "vs10xx_uc.h" // From VLSI website: http://www.vlsi.fi/en/support/software/microcontrollersoftware.html
+#include "vs10xx_uc.h" // Libreria brindada por el fabricante
 
 #define VS1053_MP3_SHIELD 1
 
@@ -10,10 +10,7 @@ extern "C" {
 }
 #endif
 
-// Use binary to say which MIDI channels this should respond to.
-// Every "1" here enables that channel. Set all bits for all channels.
-// Make sure the bit for channel 10 is set if you want drums.
-//
+//Filtra los canales MIDI. 1=canal habilitado, 0=canal deshabilitado
 //                               16  12  8   4  1
 //                               |   |   |   |  |
 uint16_t MIDI_CHANNEL_FILTER = 0b1111111111111111;
@@ -30,7 +27,7 @@ uint16_t MIDI_CHANNEL_FILTER = 0b1111111111111111;
 #define VS_SCK    13
 #define VS_SS     10
 
-//Bancos de sonido disponibles usando el comando MIDI 0xBn 0x00 bank
+
 #define DEFAULT_SOUND_BANK 0x00  // General MIDI 1 sound bank
 #define DRUM_SOUND_BANK    0x78  // Drums
 #define ISNTR_SOUND_BANK   0x79  // General MIDI 2 sound bank
@@ -57,9 +54,6 @@ byte preset_instruments[16] = {
 
 MIDI_CREATE_DEFAULT_INSTANCE();
 
-byte instrument;
-byte volume;
-
 #ifdef TEST
 char teststr[32];
 #endif
@@ -71,9 +65,15 @@ initialiseVS10xx();
 
 MIDI.begin(MIDI_CHANNEL_OMNI);
 
-//segmentacion de instrumentos segun el canal MIDI
+  // Configure the instruments for all required MIDI channels.
+  // Even though MIDI channels are 1 to 16, all the code here
+  // is working on 0 to 15 (bitshifts, index into array, MIDI command).
+  //
+  // Also, instrument numbers in the MIDI spec are 1 to 128,
+  // but need to be converted to 0 to 127 here.
+  //
   for (byte ch=0; ch<16; ch++) {
-    if (ch != 9) {  // Ignora el canal de percusion
+    if (ch != 9) {  // Ignore channel 10 (drums)
       if (preset_instruments[ch] != 0) {
         uint16_t ch_filter = 1<<ch;
         if (MIDI_CHANNEL_FILTER & ch_filter) {
@@ -82,27 +82,22 @@ MIDI.begin(MIDI_CHANNEL_OMNI);
       }
     }
   }
+  // For some reason, the last program change isn't registered
+  // without an extra "dummy" read here.
   talkMIDI(0x80, 0, 0);
+
 }
 
 void loop() {
 
   if (MIDI.read()) {
-    // Extract the channel and type to build the command to pass on
-    // Recall MIDI channels are in the range 1 to 16, but will be
-    // encoded as 0 to 15.
-    //
-    // All commands in the range 0x80 to 0xE0 support a channel.
-    // Any command 0xF0 or above do not (they are system messages).
-    // 
     byte ch = MIDI.getChannel();
-    uint16_t ch_filter = 1<<(ch-1);  // bit numbers are 0 to 15; channels are 1 to 16
-    if (ch == 0) ch_filter = 0; // special case - always ignore system messages where ch==0
+    uint16_t ch_filter = 1<<(ch-1);  // filtra los canales
+    if (ch == 0) ch_filter = 0; 
     if (MIDI_CHANNEL_FILTER & ch_filter) {
       byte cmd = MIDI.getType();
       if ((cmd >= 0x80) && (cmd <= 0xE0)) {
-        // Merge in the channel number
-        cmd |= (ch-1);
+       cmd |= (ch-1);//une cmd con el canal
       }
       talkMIDI(cmd, MIDI.getData1(), MIDI.getData2());
     }
