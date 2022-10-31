@@ -1,0 +1,1168 @@
+#include <SPI.h>
+#include <Adafruit_GFX.h>
+#include <TFT_ILI9163C.h>
+#include <EEPROM.h>
+#include <MIDI.h>
+
+#define __DC 10
+#define __CS 9
+#define __RST 12
+#define clkPin  4
+#define dtPin  3
+#define swPin  2
+
+#define cant_pres 5
+#define range_vs 3
+#define range_chrom 7
+#define range_tracks 6
+#define range_button 17
+#define range_opcion 2
+#define range_nota 11
+#define range_octava 7
+
+#define onedot "."
+#define twodots ".."
+#define threedots "..."
+#define fourdots "...."
+#define pres_1 " VS1053"
+#define pres_2 " Cromatica"
+#define pres_3 "Mix"
+#define pres_4 "User 1" 
+#define pres_5 "User 2"
+#define pres_6 "User 3"
+
+// Color definitions
+#define BLUE    0x001F
+#define RED     0xF800
+#define WHITE   0xFFFF
+
+TFT_ILI9163C tft = TFT_ILI9163C(__DC, __CS,__RST);
+
+//Variables
+char mensaje[16]={1,7,10,11,60,61,62,63,64,65,66,67,68,69,70,71};//hasta el 4to valor son los cc de potenciometros, luego son los botones
+char canal[16]={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+char comando[16];
+unsigned long lastButtonPress = 0;
+char j  = 0;
+//distintos contadores para scrollear en los distintos modos
+char modo=0;
+char preset=0;
+char octava=4;
+char nota=0;
+char bank=0;
+char button=0;
+char opcion=0;
+char cc_sel=0;
+char nota_sel=0;
+char cc_i=0;
+char range_bank = 3;
+
+char cc_ok[]= {0,12,23,37,84};//listado de cc permitidos
+
+//banderas
+bool clkState  = LOW;
+bool clkLast  = HIGH;
+bool SAVE=0;
+bool flag_save=0;
+bool flag_giro=0;
+bool flag_puls=0;
+bool flag_nota=0;
+bool flag_octava=0;
+
+void setup() {
+  Serial.begin(9600);
+    tft.begin();
+  pinMode(clkPin,INPUT);
+  pinMode(dtPin,INPUT);
+  pinMode(swPin,INPUT_PULLUP);
+    mode();
+}
+
+void loop() {
+  if ((millis()-lastButtonPress) > 500) {
+  pulsador();}//chequea si el boton esta apretado
+  flag_giro=readRotary();
+  if(flag_giro==1 || flag_puls==1){// si hubo giro o se presiono el switch actualiza la pantalla
+    flag_giro=0;
+    flag_puls=0;
+   mode();
+   }
+}
+
+bool readRotary() {//lee el encoder y segun el modo en el que esta, suma o resta al contador correspondiente
+  clkState = digitalRead(clkPin);
+  if ((clkLast ==LOW && clkState==HIGH )) {//rotary moving
+    if (digitalRead(dtPin) == LOW) {
+      if (modo==0){
+                preset--;
+                bank=0;
+                if (preset<0){
+                  preset=cant_pres;}}
+       else if (modo==1){
+                bank--;
+                if (bank<0){
+                  bank=range_bank;}}
+        else if (modo==2){ 
+                button--;
+                  if (button<0){
+                  button=range_button;}}
+        else if(modo==3){opcion--;
+                if (opcion<0){
+                  opcion=range_opcion;}}  
+         else if(modo==4){
+                nota_sel--;
+                if (nota_sel<0){
+                  nota_sel=3;}}          
+         else if(modo==5){
+          if(flag_nota==1){
+                mensaje[button]--;
+                if(mensaje[button]==0){mensaje[button]=0;}}
+           else if (flag_octava==1){mensaje[button]=mensaje[button]-12;
+                if(mensaje[button]==0){mensaje[button]=0;}}}
+         else if (modo==6){ 
+                cc_sel--;
+                if (cc_sel<0){
+                  cc_sel=2;}}   
+         else if(modo==7){
+                cc_i--;
+                if (cc_i<0){
+                  cc_i=(sizeof(cc_ok)/sizeof(cc_ok[0])-1);}}
+        }
+    else {
+        if (modo==0){ preset++;bank=0;
+                if (preset>cant_pres){
+                  preset=0;}}
+        else if (modo==1){ bank++;
+                if (bank>range_bank){
+                  bank=0;}}    
+        else if (modo==2){button++;
+                if (button>range_button){
+                  button=0;}}  
+         else if (modo==3){opcion++;
+                if (opcion>range_opcion){
+                  opcion=0;}} 
+         else if (modo==4){ 
+                nota_sel++;
+                if (nota_sel>3){
+                  nota_sel=0;}}
+        else if (modo==5){
+              if(flag_nota==1){
+                mensaje[button]++;
+                if(mensaje[button]==119){mensaje[button]=119;}}
+           else if (flag_octava==1){mensaje[button]=mensaje[button]+12;
+                if(mensaje[button]==119){mensaje[button]=119;}}}
+        else if (modo==6){ 
+                cc_sel++;
+                if (cc_sel>2){
+                  cc_sel=0;}}       
+        else if (modo==7){ 
+                cc_i++;
+                if (cc_i>(sizeof(cc_ok)/sizeof(cc_ok[0])-1)){
+                  cc_i=0;}}
+    }
+    delay(1);
+   flag_giro=1;
+  }
+  clkLast = clkState;
+   return flag_giro;
+}
+
+void mode (void){
+  switch (modo){
+      case 0:
+          presets(preset,bank);
+          break;
+      case 1:
+          presets(preset,bank);
+          break;
+      case 2:
+          boton(button);
+          break;
+       case 3:
+          noteCC();
+          break;
+       case 4:
+          nota_MIDI();
+          break;
+        case 5:
+         nota_MIDI();
+          break;
+        case 6:
+          cc_MIDI();
+          break;
+        case 7:
+          cc_MIDI();
+          break;
+    }    
+} 
+
+void presets (char pres, char i){//pantalla de presets
+  tft.fillScreen(); 
+  tft.setTextSize(2);  
+ if (modo==1){tft.setTextColor(BLUE);}
+  else{tft.setTextColor(WHITE);}
+
+ switch(pres){
+   case 0: 
+        tft.setCursor(25,20);
+        tft.println(pres_1);
+        if (i==0){tft.setCursor(20,70);
+          tft.println(" Drums 1");}
+        else if(i==1){
+          tft.setCursor(20,70);
+          tft.println(" Drums 2");
+          }
+        else if (i==2){
+          tft.setCursor(35,70);
+          tft.println("  FX");
+          }
+         else if (i==3){
+          tft.setCursor(35,70);
+          tft.println(" Bank");
+          }
+        break;
+     case 1: 
+        tft.setCursor(5,20);
+        tft.println(pres_2);
+        tft.setCursor(20,70);
+        tft.println("C");
+        tft.setCursor(35,70);
+        tft.println(i,DEC);
+        tft.setCursor(45,70);
+        tft.println(" - C");
+        tft.setCursor(93,70);
+        tft.println(i+1,DEC);
+        break;
+      case 2:
+        tft.setCursor(50,20);
+        tft.println(pres_3);
+        tft.setCursor(15,70);
+        tft.println("Track ");
+        tft.setCursor(80,70);
+        tft.println(i,DEC);
+        tft.setCursor(95,70);
+        tft.println("-");
+        tft.setCursor(110,70);
+        tft.println(i+3,DEC);
+        break;
+      case 3:
+        tft.setCursor(35,20);
+        tft.println(pres_4);
+        break;
+       case 4:
+        tft.setCursor(35,20);
+        tft.println(pres_5);
+        break;
+       case 5:
+        tft.setCursor(35,20);
+        tft.println(pres_6);
+        break;
+ }//fin switch
+}//fin funcion preset
+
+void noteCC (void){//pantalla de seleccion del tipo de msj que va a disparar el boton seleccionado
+      tft.fillScreen();
+      tft.setTextSize(2);
+      tft.setTextColor(WHITE); 
+      
+      if(opcion==0){
+        tft.setCursor(5, 40); 
+        tft.println(">  CC");
+        tft.setCursor(5, 60); 
+        tft.println("   Nota");
+        tft.setTextSize(1);
+         tft.setCursor(30, 105);
+         tft.println("X");
+        }
+        else if (opcion==1){
+        tft.setCursor(5, 40); 
+        tft.println("   CC");
+        tft.setCursor(5, 60); 
+        tft.println(">   Nota");
+        tft.setTextSize(1);
+         tft.setCursor(30, 105);
+         tft.println("X");
+         }
+         else if (opcion==2){
+        tft.setCursor(5, 40); 
+        tft.println("   CC");
+        tft.setCursor(5, 60); 
+        tft.println("   Nota");
+        tft.setTextSize(1);
+         tft.setTextColor(BLUE);
+         tft.setCursor(30, 105);
+         tft.println("X");
+         }
+   }
+
+void boton(char i){//pantalla para seleccionar el boton
+      tft.fillScreen();
+      tft.setTextSize(5);
+  switch(i){
+    case 0:
+         tft.setCursor(5, 0);
+         tft.setTextColor(BLUE);  
+         tft.println(onedot);
+         tft.setCursor(35, 0);
+         tft.setTextColor(RED);  
+         tft.println(threedots);
+         tft.setTextColor(WHITE);  
+         tft.setCursor(5, 30);
+         tft.println(fourdots);
+         tft.setCursor(5, 45);
+         tft.println(fourdots);
+         tft.setCursor(5, 60);
+         tft.println(fourdots);
+         tft.setTextSize(1);
+         tft.setCursor(30, 105);
+         tft.println("X");
+         tft.setCursor(90, 105);
+         tft.println("V");
+         break;
+     case 1:
+         tft.setCursor(5, 0);
+         tft.setTextColor(RED);  
+         tft.println(onedot);
+         tft.setCursor(35, 0);
+         tft.setTextColor(BLUE);  
+         tft.println(onedot);
+         tft.setCursor(65, 0);
+         tft.setTextColor(RED);  
+         tft.println(twodots);
+         tft.setTextColor(WHITE);  
+         tft.setCursor(5, 30);
+         tft.println(fourdots);
+         tft.setCursor(5, 45);
+         tft.println(fourdots);
+         tft.setCursor(5, 60);
+         tft.println(fourdots);
+         tft.setTextSize(1);
+         tft.setCursor(30, 105);
+         tft.println("X");
+         tft.setCursor(90, 105);
+         tft.println("V");
+         break;
+     case 2:
+         tft.setCursor(5, 0);
+         tft.setTextColor(RED);  
+         tft.println(twodots);
+         tft.setCursor(65, 0);
+         tft.setTextColor(BLUE);  
+         tft.println(onedot);
+         tft.setCursor(95, 0);
+         tft.setTextColor(RED);  
+         tft.println(onedot);
+         tft.setTextColor(WHITE);  
+         tft.setCursor(5, 30);
+         tft.println(fourdots);
+         tft.setCursor(5, 45);
+         tft.println(fourdots);
+         tft.setCursor(5, 60);
+         tft.println(fourdots);
+         tft.setTextSize(1);
+         tft.setCursor(30, 105);
+         tft.println("X");
+         tft.setCursor(90, 105);
+         tft.println("V");
+         break;
+     case 3:
+         tft.setCursor(5, 0);
+         tft.setTextColor(RED);  
+         tft.println(threedots);
+         tft.setCursor(95, 0);
+         tft.setTextColor(BLUE);  
+         tft.println(onedot);
+         tft.setTextColor(WHITE);  
+         tft.setCursor(5, 30);
+         tft.println(fourdots);
+         tft.setCursor(5, 45);
+         tft.println(fourdots);
+         tft.setCursor(5, 60);
+         tft.println(fourdots);
+         tft.setTextSize(1);
+         tft.setCursor(30, 105);
+         tft.println("X");
+         tft.setCursor(90, 105);
+         tft.println("V");
+         break;
+    case 4:
+         tft.setCursor(5, 0);
+         tft.setTextColor(RED);  
+         tft.println(fourdots);
+         tft.setTextColor(BLUE);
+         tft.setCursor(5, 30);
+         tft.println(onedot);
+         tft.setTextColor(WHITE);  
+         tft.setCursor(35, 30);
+         tft.println(threedots);
+         tft.setCursor(5, 45);
+         tft.println(fourdots);
+         tft.setCursor(5, 60);
+         tft.println(fourdots);
+         tft.setTextSize(1);
+         tft.setCursor(30, 105);
+         tft.println("X");
+         tft.setCursor(90, 105);
+         tft.println("V");
+          break;
+     case 5:
+         tft.setCursor(5, 0);
+         tft.setTextColor(RED);  
+         tft.println(fourdots);
+         tft.setTextColor(WHITE);
+         tft.setCursor(5, 30);
+         tft.println(onedot);
+         tft.setTextColor(BLUE);
+         tft.setCursor(35, 30);
+         tft.println(onedot);
+         tft.setTextColor(WHITE);
+         tft.setCursor(65, 30);
+         tft.println(twodots);
+         tft.setCursor(5, 45);
+         tft.println(fourdots);
+         tft.setCursor(5, 60);
+         tft.println(fourdots);
+         tft.setTextSize(1);
+         tft.setCursor(30, 105);
+         tft.println("X");
+         tft.setCursor(90, 105);
+         tft.println("V");
+         break;
+     case 6:
+        tft.setCursor(5, 0);
+        tft.setTextColor(RED);  
+        tft.println(fourdots);//primer fila roja
+        tft.setTextColor(WHITE);
+         tft.setCursor(5, 30);
+         tft.println(twodots);//primeros 2 botones 2da fila blancos
+         tft.setTextColor(BLUE);
+         tft.setCursor(65, 30);
+         tft.println(onedot);//tercer boton verde
+         tft.setTextColor(WHITE);
+         tft.setCursor(95, 30);
+         tft.println(onedot);//4to boton blanco         
+         tft.setCursor(5, 45);
+         tft.println(fourdots);//3er fila blanca
+         tft.setCursor(5, 60);
+         tft.println(fourdots);//4ta fila blanca
+         tft.setTextSize(1);
+         tft.setCursor(30, 105);
+         tft.println("X");
+         tft.setCursor(90, 105);
+         tft.println("V");
+         break;
+     case 7:
+        tft.setCursor(5, 0);
+        tft.setTextColor(RED);  
+        tft.println(fourdots);//primer fila roja
+        tft.setTextColor(WHITE);
+         tft.setCursor(5, 30);
+         tft.println(threedots);//primeros 3 botones 2da fila blancos
+         tft.setTextColor(BLUE);
+         tft.setCursor(95, 30);
+         tft.println(onedot);//4to boton verde
+         tft.setTextColor(WHITE);
+         tft.setCursor(5, 45);
+         tft.println(fourdots);//3er fila blanca
+         tft.setCursor(5, 60);
+         tft.println(fourdots);//4ta fila blanca
+         tft.setTextSize(1);
+         tft.setCursor(30, 105);
+         tft.println("X");
+         tft.setCursor(90, 105);
+         tft.println("V");
+         break; 
+     case 8: 
+         tft.setTextColor(RED);  
+         tft.setCursor(5, 0);
+         tft.println(fourdots);
+         tft.setTextColor(WHITE);
+         tft.setCursor(5, 30);  
+         tft.println(fourdots);
+         tft.setTextColor(BLUE);
+         tft.setCursor(5, 45);
+         tft.println(onedot);
+         tft.setTextColor(WHITE);
+         tft.setCursor(35, 45);
+         tft.println(threedots);
+         tft.setCursor(5, 60);
+         tft.println(fourdots);//4ta fila blanca
+         tft.setTextSize(1);
+         tft.setCursor(30, 105);
+         tft.println("X");
+         tft.setCursor(90, 105);
+         tft.println("V");
+         break;
+     case 9:
+         tft.setTextColor(RED);  
+         tft.setCursor(5, 0);
+         tft.println(fourdots);
+         tft.setTextColor(WHITE);
+         tft.setCursor(5, 30);  
+         tft.println(fourdots);
+         tft.setCursor(5, 45);
+         tft.println(onedot);
+         tft.setTextColor(BLUE);
+         tft.setCursor(35, 45);
+         tft.println(onedot);
+         tft.setTextColor(WHITE);
+         tft.setCursor(65, 45);
+         tft.println(twodots);
+         tft.setCursor(5, 60);
+         tft.println(fourdots);//4ta fila blanca
+         tft.setTextSize(1);
+         tft.setCursor(30, 105);
+         tft.println("X");
+         tft.setCursor(90, 105);
+         tft.println("V");
+         break;
+     case 10:
+         tft.setTextColor(RED);  
+         tft.setCursor(5, 0);
+         tft.println(fourdots);
+         tft.setTextColor(WHITE);
+         tft.setCursor(5, 30);  
+         tft.println(fourdots);
+         tft.setCursor(5, 45);
+         tft.println(twodots);
+         tft.setTextColor(BLUE);
+         tft.setCursor(65, 45);
+         tft.println(onedot);
+         tft.setTextColor(WHITE);
+         tft.setCursor(95, 45);
+         tft.println(onedot);
+         tft.setCursor(5, 60);
+         tft.println(fourdots);//4ta fila blanca
+         tft.setTextSize(1);
+         tft.setCursor(30, 105);
+         tft.println("X");
+         tft.setCursor(90, 105);
+         tft.println("V");
+         break;
+     case 11:
+         tft.setTextColor(RED);  
+         tft.setCursor(5, 0);
+         tft.println(fourdots);
+         tft.setTextColor(WHITE);
+         tft.setCursor(5, 30);  
+         tft.println(fourdots);
+         tft.setCursor(5, 45);
+         tft.println(threedots);
+         tft.setTextColor(BLUE);
+         tft.setCursor(95, 45);
+         tft.println(onedot);
+         tft.setTextColor(WHITE);
+         tft.setCursor(5, 60);
+         tft.println(fourdots);//4ta fila blanca
+         tft.setTextSize(1);
+         tft.setCursor(30, 105);
+         tft.println("X");
+         tft.setCursor(90, 105);
+         tft.println("V");
+         break;
+    case 12:
+         tft.setCursor(5, 0);
+         tft.setTextColor(RED);  
+         tft.println(fourdots);
+         tft.setTextColor(WHITE); 
+         tft.setCursor(5, 30); 
+         tft.println(fourdots);
+         tft.setCursor(5, 45);
+         tft.println(fourdots);
+         tft.setTextColor(BLUE);
+         tft.setCursor(5, 60);
+         tft.println(onedot);
+         tft.setTextColor(WHITE);
+         tft.setCursor(35, 60);
+         tft.println(threedots);
+         tft.setTextSize(1);
+         tft.setCursor(30, 105);
+         tft.println("X");
+         tft.setCursor(90, 105);
+         tft.println("V");
+         break;
+     case 13:
+         tft.setCursor(5, 0);
+         tft.setTextColor(RED);  
+         tft.println(fourdots);
+         tft.setTextColor(WHITE); 
+         tft.setCursor(5, 30); 
+         tft.println(fourdots);
+         tft.setCursor(5, 45);
+         tft.println(fourdots);
+         tft.setTextColor(WHITE);
+         tft.setCursor(5, 60);
+         tft.println(onedot);
+         tft.setTextColor(BLUE);
+         tft.setCursor(35, 60);
+         tft.println(onedot);         
+         tft.setTextColor(WHITE);
+         tft.setCursor(65, 60);
+         tft.println(threedots);
+         tft.setTextSize(1);
+         tft.setCursor(30, 105);
+         tft.println("X");
+         tft.setCursor(90, 105);
+         tft.println("V");
+         break;
+     case 14:
+         tft.setCursor(5, 0);
+         tft.setTextColor(RED);  
+         tft.println(fourdots);
+         tft.setTextColor(WHITE); 
+         tft.setCursor(5, 30); 
+         tft.println(fourdots);
+         tft.setCursor(5, 45);
+         tft.println(fourdots);
+         tft.setTextColor(WHITE);
+         tft.setCursor(5, 60);
+         tft.println(twodots);
+         tft.setTextColor(BLUE);
+         tft.setCursor(65, 60);
+         tft.println(onedot);         
+         tft.setTextColor(WHITE);
+         tft.setCursor(95, 60);
+         tft.println(threedots);
+         tft.setTextSize(1);
+         tft.setCursor(30, 105);
+         tft.println("X");
+         tft.setCursor(90, 105);
+         tft.println("V");
+         break;
+     case 15:
+         tft.setCursor(5, 0);
+         tft.setTextColor(RED);  
+         tft.println(fourdots);
+         tft.setTextColor(WHITE); 
+         tft.setCursor(5, 30); 
+         tft.println(fourdots);
+         tft.setCursor(5, 45);
+         tft.println(fourdots);
+         tft.setTextColor(WHITE);
+         tft.setCursor(5, 60);
+         tft.println(threedots);
+         tft.setTextColor(BLUE);
+         tft.setCursor(95, 60);
+         tft.println(onedot);
+         tft.setTextColor(WHITE);
+         tft.setTextSize(1);
+         tft.setCursor(30, 105);
+         tft.println("X");
+         tft.setCursor(90, 105);
+         tft.println("V");
+         break;
+    case 16:
+         tft.setCursor(5, 0);
+         tft.setTextColor(RED);  
+         tft.println(fourdots);
+         tft.setTextColor(WHITE);  
+         tft.setCursor(5, 30);
+         tft.println(fourdots);
+         tft.setCursor(5, 45);
+         tft.println(fourdots);
+         tft.setCursor(5, 60);
+         tft.println(fourdots);
+         tft.setTextSize(1);
+         tft.setTextColor(BLUE);
+         tft.setCursor(30, 105);
+         tft.println("X");
+         tft.setTextColor(WHITE);
+         tft.setCursor(90, 105);
+         tft.println("V");
+         break;
+    case 17:
+         tft.setCursor(5, 0);
+         tft.setTextColor(RED);  
+         tft.println(fourdots);
+         tft.setTextColor(WHITE);  
+         tft.setCursor(5, 30);
+         tft.println(fourdots);
+         tft.setCursor(5, 45);
+         tft.println(fourdots);
+         tft.setCursor(5, 60);
+         tft.println(fourdots);
+         tft.setTextSize(1);
+         tft.setCursor(30, 105);
+         tft.println("X");
+         tft.setTextColor(BLUE);
+         tft.setCursor(90, 105);
+         tft.println("V");
+         break;
+     }  
+}//fin funcion boton
+
+
+void pulsador(void){//determina que pasa cuando se presiona el switch del encoder segun el modo en el que este
+if(digitalRead(swPin)==LOW){
+          lastButtonPress = millis();
+          flag_puls=1;
+    switch (modo){
+      case 0:
+          tft.fillScreen(); 
+          if(preset>2){modo=2;}
+          else if (preset==0){range_bank=range_vs;modo=1;}
+          else if (preset==1){range_bank=range_chrom;modo=1;}
+          else if(preset==2){range_bank=range_tracks;modo=1;}
+          break;
+       case 1:
+          tft.fillScreen(); 
+          modo=0;
+          break;
+        case 2:
+          tft.fillScreen(); 
+          if (button<4){modo=6;}
+          else if (button>=4 && button<16){modo=3;}
+          else if (button==16){SAVE=1;modo=0;}
+          else if(button==17){modo=0;}
+          break;
+        case 3:
+          tft.fillScreen(); 
+          if (opcion==0){modo=6;}
+          else if (opcion==1){modo=4;}
+          else if(opcion==2){modo=2;}
+          break;
+         case 4:
+           opcion=0;
+           tft.fillScreen(); 
+           if(nota_sel==0){
+            flag_nota=1;
+            flag_octava=0;
+            modo=5;}
+           else if(nota_sel==1){
+            flag_octava=1;
+            flag_nota=0;
+            modo=5; }
+         else if(nota_sel==2){
+            flag_octava=0;
+            flag_nota=0;
+            modo=2; }
+        else if(nota_sel==3){
+            flag_octava=0;
+            flag_nota=0;
+            flag_save=1;
+            modo=2; }
+          break;
+        case 5:
+            tft.fillScreen(); 
+            nota_sel=0;
+            modo=4;
+            break;
+          case 6:
+          tft.fillScreen();
+           if (cc_sel==0){cc_sel=0;modo=7;}
+           else if(cc_sel==1){
+                      cc_sel=0;
+                      if(button<4){modo=2;}
+                       else {modo=3;}}
+           else if(cc_sel==2){cc_sel=0;flag_save==1;modo=2;}
+           break;
+        case 7:
+        tft.fillScreen();
+           modo=6;
+           break;
+    }
+    delay(1);//debounce
+}
+}//fin pulsador
+
+void nota_MIDI(void){//pantalla de cambio de la nota que dispara el boton
+tft.fillScreen();
+descifrar_nota();
+if(modo==4){
+flag_nota=0;
+flag_octava=0;
+  if(nota_sel==0){
+         tft.setTextSize(2);
+         tft.setTextColor(BLUE);
+         tft.setCursor(5, 20); 
+         tft.println("Nota: ");
+         tft.setTextColor(WHITE);
+         tft.setCursor(90, 20); 
+         switch (nota){
+                    case 0:
+                          tft.println("C");
+                          break;
+                    case 1:
+                          tft.println("C#");
+                          break;
+                    case 2:
+                          tft.println("D");
+                          break;
+                    case 3:
+                          tft.println("D#");
+                          break;
+                    case 4:
+                          tft.println("E");
+                          break;
+                    case 5:
+                          tft.println("F");
+                          break;
+                    case 6:
+                          tft.println("F#");
+                          break;
+                    case 7:
+                          tft.println("G");
+                          break;
+                    case 8:
+                          tft.println("G#");
+                          break;
+                    case 9:
+                          tft.println("A");
+                          break;
+                    case 10:
+                          tft.println("A#");
+                          break;
+                    case 11:
+                          tft.println("B");
+                          break;
+         }      
+         tft.setCursor(5, 50); 
+         tft.println("Oct: ");
+         tft.setCursor(90, 50); 
+         tft.println(octava,DEC);
+         tft.setTextSize(1);
+         tft.setCursor(30, 105);
+         tft.println("X");
+         tft.setCursor(90, 105);
+         tft.println("V");}
+    else if(nota_sel==1){
+         tft.setTextSize(2);
+         tft.setTextColor(WHITE);
+         tft.setCursor(5, 20); 
+         tft.println("Nota: ");
+                   tft.setCursor(90, 20); 
+         switch (nota){
+                    case 0:
+                          tft.println("C");
+                          break;
+                    case 1:
+                          tft.println("C#");
+                          break;
+                    case 2:
+                          tft.println("D");
+                          break;
+                    case 3:
+                          tft.println("D#");
+                          break;
+                    case 4:
+                          tft.println("E");
+                          break;
+                    case 5:
+                          tft.println("F");
+                          break;
+                    case 6:
+                          tft.println("F#");
+                          break;
+                    case 7:
+                          tft.println("G");
+                          break;
+                    case 8:
+                          tft.println("G#");
+                          break;
+                    case 9:
+                          tft.println("A");
+                          break;
+                    case 10:
+                          tft.println("A#");
+                          break;
+                    case 11:
+                          tft.println("B");
+                          break;
+         }      
+         tft.setTextColor(BLUE);
+         tft.setCursor(5, 50); 
+         tft.println("Oct: ");
+         tft.setTextColor(WHITE);
+         tft.setCursor(90, 50); 
+         tft.println(octava,DEC);
+         tft.setTextSize(1);
+         tft.setCursor(30, 105);
+         tft.println("X");
+         tft.setCursor(90, 105);
+         tft.println("V");}
+     else if(nota_sel==2){
+         tft.setTextSize(2);
+         tft.setTextColor(WHITE);
+         tft.setCursor(5, 20); 
+         tft.println("Nota: ");
+         tft.setCursor(90, 20); 
+         switch (nota){
+                    case 0:
+                          tft.println("C");
+                          break;
+                    case 1:
+                          tft.println("C#");
+                          break;
+                    case 2:
+                          tft.println("D");
+                          break;
+                    case 3:
+                          tft.println("D#");
+                          break;
+                    case 4:
+                          tft.println("E");
+                          break;
+                    case 5:
+                          tft.println("F");
+                          break;
+                    case 6:
+                          tft.println("F#");
+                          break;
+                    case 7:
+                          tft.println("G");
+                          break;
+                    case 8:
+                          tft.println("G#");
+                          break;
+                    case 9:
+                          tft.println("A");
+                          break;
+                    case 10:
+                          tft.println("A#");
+                          break;
+                    case 11:
+                          tft.println("B");
+                          break;
+         }      
+         tft.setCursor(5, 50); 
+         tft.println("Oct: ");
+         tft.setCursor(90, 50); 
+         tft.println(octava,DEC);
+         tft.setTextSize(1);
+         tft.setTextColor(BLUE);
+         tft.setCursor(30, 105);
+         tft.println("X");
+         tft.setTextColor(WHITE);
+         tft.setCursor(90, 105);
+         tft.println("V");}
+     else if(nota_sel==3){
+         tft.setTextSize(2);
+         tft.setTextColor(WHITE);
+         tft.setCursor(5, 20); 
+         tft.println("Nota: ");
+         tft.setCursor(90, 20); 
+         switch (nota){
+                    case 0:
+                          tft.println("C");
+                          break;
+                    case 1:
+                          tft.println("C#");
+                          break;
+                    case 2:
+                          tft.println("D");
+                          break;
+                    case 3:
+                          tft.println("D#");
+                          break;
+                    case 4:
+                          tft.println("E");
+                          break;
+                    case 5:
+                          tft.println("F");
+                          break;
+                    case 6:
+                          tft.println("F#");
+                          break;
+                    case 7:
+                          tft.println("G");
+                          break;
+                    case 8:
+                          tft.println("G#");
+                          break;
+                    case 9:
+                          tft.println("A");
+                          break;
+                    case 10:
+                          tft.println("A#");
+                          break;
+                    case 11:
+                          tft.println("B");
+                          break;
+         }      
+         tft.setCursor(5, 50); 
+         tft.println("Oct: ");
+         tft.setCursor(90, 50); 
+         tft.println(octava,DEC);
+         tft.setTextSize(1);
+         tft.setCursor(30, 105);
+         tft.println("X");
+         tft.setTextColor(BLUE);
+         tft.setCursor(90, 105);
+         tft.println("V");}
+}//fin if modo 4
+else if (modo==5){
+  if(flag_nota==1){
+    flag_octava=0;
+         tft.setTextSize(2);
+         tft.setTextColor(BLUE);
+         tft.setCursor(5, 20); 
+         tft.println("Nota: ");
+          tft.setCursor(90, 20); 
+         switch (nota){
+                    case 0:
+                          tft.println("C");
+                          break;
+                    case 1:
+                          tft.println("C#");
+                          break;
+                    case 2:
+                          tft.println("D");
+                          break;
+                    case 3:
+                          tft.println("D#");
+                          break;
+                    case 4:
+                          tft.println("E");
+                          break;
+                    case 5:
+                          tft.println("F");
+                          break;
+                    case 6:
+                          tft.println("F#");
+                          break;
+                    case 7:
+                          tft.println("G");
+                          break;
+                    case 8:
+                          tft.println("G#");
+                          break;
+                    case 9:
+                          tft.println("A");
+                          break;
+                    case 10:
+                          tft.println("A#");
+                          break;
+                    case 11:
+                          tft.println("B");
+                          break;
+         }      
+         tft.setTextColor(WHITE);
+         tft.setCursor(5, 50); 
+         tft.println("Oct: ");
+         tft.setCursor(90, 50); 
+         tft.println(octava,DEC);}
+    else if(flag_octava==1){
+          flag_nota=0;
+         tft.setTextSize(2);
+         tft.setTextColor(WHITE);
+         tft.setCursor(5, 20); 
+         tft.println("Nota: ");
+          tft.setCursor(90, 20); 
+         switch (nota){
+                    case 0:
+                          tft.println("C");
+                          break;
+                    case 1:
+                          tft.println("C#");
+                          break;
+                    case 2:
+                          tft.println("D");
+                          break;
+                    case 3:
+                          tft.println("D#");
+                          break;
+                    case 4:
+                          tft.println("E");
+                          break;
+                    case 5:
+                          tft.println("F");
+                          break;
+                    case 6:
+                          tft.println("F#");
+                          break;
+                    case 7:
+                          tft.println("G");
+                          break;
+                    case 8:
+                          tft.println("G#");
+                          break;
+                    case 9:
+                          tft.println("A");
+                          break;
+                    case 10:
+                          tft.println("A#");
+                          break;
+                    case 11:
+                          tft.println("B");
+                          break;
+         }      
+         tft.setTextColor(BLUE);
+         tft.setCursor(5, 50); 
+         tft.println("Oct: ");
+         tft.setCursor(90, 50); 
+         tft.println(octava,DEC);}
+}//fin if modo 5
+}//fin nota midi
+
+void cc_MIDI (void){//pantalla para modificar el msj cc que cambia el pote o que dispara el boton
+        tft.fillScreen();
+if(modo==6){
+      if(cc_sel==0){
+         tft.setTextSize(2);
+         tft.setTextColor(BLUE);
+         tft.setCursor(5, 40); 
+         tft.println("  CC: ");
+         tft.setTextColor(WHITE);
+         tft.setCursor(90, 40); 
+         tft.println(cc_ok[cc_i],DEC);
+         tft.setTextSize(1);
+         tft.setCursor(30, 105);
+         tft.println("X");
+         tft.setCursor(90, 105);
+         tft.println("V");}
+    else if(cc_sel==1){
+         tft.setTextSize(2);
+         tft.setTextColor(WHITE);
+         tft.setCursor(5, 40); 
+         tft.println("  CC: ");
+         tft.setCursor(90, 40); 
+         tft.println(cc_ok[cc_i],DEC);
+         tft.setTextColor(BLUE);
+         tft.setTextSize(1);
+         tft.setCursor(30, 105);
+         tft.println("X");
+         tft.setTextColor(WHITE);
+         tft.setCursor(90, 105);
+         tft.println("V");}
+    else if(cc_sel==2){
+         tft.setTextSize(2);
+         tft.setTextColor(WHITE);
+         tft.setCursor(5, 40); 
+         tft.println("  CC: ");
+         tft.setCursor(90, 40); 
+         tft.println(cc_ok[cc_i],DEC);
+         tft.setTextSize(1);
+         tft.setCursor(30, 105);
+         tft.println("X");
+         tft.setTextColor(BLUE);
+         tft.setCursor(90, 105);
+         tft.println("V");}
+}
+else if (modo==7){
+         tft.setTextSize(2);
+         tft.setTextColor(BLUE);
+         tft.setCursor(5, 40); 
+         tft.println("  CC: ");
+         tft.setCursor(90, 40); 
+         tft.println(cc_ok[cc_i],DEC);
+         tft.setTextColor(WHITE);
+         tft.setTextSize(1);
+         tft.setCursor(30, 105);
+         tft.println("X");
+         tft.setCursor(90, 105);
+         tft.println("V");}
+}//fin cc_MIDI
+
+void descifrar_nota (void){//segun el numero de nota nos dice cual es
+if (mensaje[button]<24){octava=0;}
+else if (mensaje[button]<36){octava=1;}
+else if (mensaje[button]<48){octava=2;}
+else if (mensaje[button]<60){octava=3;}
+else if (mensaje[button]<72){octava=4;}
+else if (mensaje[button]<84){octava=5;}
+else if (mensaje[button]<96){octava=6;}
+else if (mensaje[button]<108){octava=7;}
+else if (mensaje[button]<120){octava=8;}
+
+nota=(mensaje[button]-(12*(octava+1)));
+}
